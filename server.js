@@ -22,14 +22,19 @@ if (!fs.existsSync(DOWNLOADS_ROOT)) {
 /* expose downloaded files */
 app.use("/files", express.static(DOWNLOADS_ROOT));
 
+/* helper: run yt-dlp safely in docker */
+function runYtDlp(args, callback) {
+  exec(`python3 -m yt_dlp ${args}`, callback);
+}
+
 /* ======================================================
-   YOUTUBE INFO (yt-dlp)
+   YOUTUBE INFO
 ====================================================== */
 app.get("/info", (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: "No URL provided" });
 
-  exec(`yt-dlp -J "${url}"`, (err, stdout, stderr) => {
+  runYtDlp(`-J "${url}"`, (err, stdout, stderr) => {
     if (err) {
       console.error("YT INFO ERROR:", stderr || err.message);
       return res.status(500).json({ error: "Failed to fetch info" });
@@ -39,7 +44,8 @@ app.get("/info", (req, res) => {
     try {
       info = JSON.parse(stdout);
     } catch (e) {
-      return res.status(500).json({ error: "Invalid yt-dlp response" });
+      console.error("YT JSON PARSE ERROR:", e);
+      return res.status(500).json({ error: "Invalid yt-dlp output" });
     }
 
     const formats = info.formats || [];
@@ -87,37 +93,34 @@ app.get("/download", (req, res) => {
     `yt_${Date.now()}.%(ext)s`
   );
 
-  exec(
-    `yt-dlp -f ${format} -o "${outputTemplate}" "${url}"`,
-    (err) => {
-      if (err) {
-        console.error("YT DOWNLOAD ERROR:", err.message);
-        return res.status(500).json({ error: "Download failed" });
-      }
-
-      const file = fs
-        .readdirSync(DOWNLOADS_ROOT)
-        .find(f => f.startsWith("yt_"));
-
-      if (!file) {
-        return res.status(500).json({ error: "File not found" });
-      }
-
-      res.json({
-        downloadUrl: `${req.protocol}://${req.get("host")}/files/${file}`,
-      });
+  runYtDlp(`-f ${format} -o "${outputTemplate}" "${url}"`, (err) => {
+    if (err) {
+      console.error("YT DOWNLOAD ERROR:", err.message);
+      return res.status(500).json({ error: "Download failed" });
     }
-  );
+
+    const file = fs
+      .readdirSync(DOWNLOADS_ROOT)
+      .find(f => f.startsWith("yt_"));
+
+    if (!file) {
+      return res.status(500).json({ error: "File not found" });
+    }
+
+    res.json({
+      downloadUrl: `${req.protocol}://${req.get("host")}/files/${file}`,
+    });
+  });
 });
 
 /* ======================================================
-   INSTAGRAM INFO (yt-dlp ONLY – STABLE)
+   INSTAGRAM INFO (yt-dlp)
 ====================================================== */
 app.get("/instagram-info", (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: "No URL provided" });
 
-  exec(`yt-dlp -J "${url}"`, (err, stdout, stderr) => {
+  runYtDlp(`-J "${url}"`, (err, stdout, stderr) => {
     if (err) {
       console.error("IG INFO ERROR:", stderr || err.message);
       return res
@@ -137,7 +140,7 @@ app.get("/instagram-info", (req, res) => {
       title: info.title,
       thumbnail: info.thumbnail,
       duration: info.duration,
-      formats: info.formats
+      formats: (info.formats || [])
         .filter(f => f.url)
         .map(f => ({
           url: f.url,
